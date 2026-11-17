@@ -43,7 +43,7 @@ jobs:
           test -x target/dist/PulseCut.app/Contents/MacOS/PulseCut
           test -x target/dist/PulseCut.app/Contents/MacOS/pulsecut-cli
           target/dist/PulseCut.app/Contents/MacOS/pulsecut-cli --version
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: PulseCut-macos
           path: target/dist/*.dmg
@@ -69,7 +69,7 @@ jobs:
         run: cargo test --workspace --release
       - name: Package
         run: pwsh scripts/package-windows.ps1
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: PulseCut-windows
           path: target/dist/*.zip
