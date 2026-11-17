@@ -115,6 +115,52 @@ async fn segment_buffer_captures_anchored_window() {
     rec.stop();
 }
 
+/// Releasing a stream (dropping every capture handle) while a clip is still waiting for its
+/// post-roll must finish that clip, not discard it.
+#[tokio::test]
+async fn released_source_finishes_pending_clips() {
+    let Some(t) = tools() else { return };
+    let dir = tempfile::tempdir().unwrap();
+    let rec = SegmentRecorder::spawn(
+        SegmentConfig {
+            input: "lavfi:test".into(),
+            dir: dir.path().join("seg"),
+            segment_secs: 1,
+            ring_secs: 30,
+            copy_codec: false,
+            audio_analysis: false,
+        },
+        t.clone(),
+        None,
+    )
+    .unwrap();
+    tokio::time::sleep(Duration::from_secs(6)).await;
+    let (rtx, mut rrx) = mpsc::channel(4);
+    let (h, done) = coordinator::spawn_tracked(
+        Backend::Segments(rec.clone()),
+        t.clone(),
+        CoordinatorConfig {
+            policy: POLICY,
+            save_margin_ms: 500,
+            raw_dir: dir.path().join("raw"),
+        },
+        rtx,
+    );
+    // Moment "now": the post-roll (2 s) is still in the future when the handle is dropped.
+    let mut ev = HighlightEvent::manual("twitch:x", TriggerSource::Manual, now_ms());
+    ev.trigger = TriggerSource::MultiSignal;
+    assert!(h.request(CaptureRequest::around(ev, 3_000, 2_000)));
+    drop(h);
+    tokio::time::timeout(Duration::from_secs(30), done)
+        .await
+        .unwrap()
+        .unwrap();
+    let res = rrx.recv().await.expect("pending clip was discarded");
+    assert!(res.error.is_none() && res.suppressed.is_none(), "{:?}", res.error);
+    assert!(res.file.unwrap().coverage.moment_covered());
+    rec.stop();
+}
+
 #[tokio::test]
 async fn obs_controller_auth_status_save_and_reconnect() {
     let Some(t) = tools() else { return };

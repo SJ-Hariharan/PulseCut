@@ -54,6 +54,19 @@ Report: `demo-output/demo-report.json`. Visual checks: `research/demo-sheet.png`
 * `pulsecut-cli encoders` → VideoToolbox and libx264 both pass a real 1080×1920 test encode outside the sandbox (VideoToolbox fails inside the sandbox; PulseCut falls back to libx264 automatically).
 * Desktop app launched as a bundle; all 7 pages exercised with screenshots (library preview playback, editor plan, asset previews, publishing queue, settings).
 
+## Manual integration test: monitoring and clipping with real services
+
+Automated tests use a mock OBS, a mock Helix server and simulated capture; they do not prove real-world reliability. Run this procedure before a release:
+
+1. **Selection without credentials.** Add two live Twitch streamers on the Live Monitor page, leave the Twitch client id empty, set max streams to 1. Expect: dashboard shows one `buffering` stream and `live status unknown`; `GET /api/monitor` lists the decision reasons.
+2. **Selection with Helix.** Enter a client id + secret. Expect within one poll: live/offline and viewer counts in the table. Mark the non-selected streamer as favorite: after `min_watch_secs` the favorite replaces the current stream (`switch … favorite … is live`).
+3. **Trending fallback.** Disable every watchlisted streamer and enable trending. Expect a trending stream to be selected; re-enable a live watchlisted streamer and expect the trending stream to be released immediately.
+4. **No lost clips on switch.** Trigger `POST /api/clip` and within 5 s force a switch (press **monitor now** on another streamer). Expect the clip to appear in the library (`saved` then `clip ready`), not a failure.
+5. **Cooldown/dedup.** With autonomous clipping on, watch the trigger log during a busy stream: moments within the cooldown show `suppressed`.
+6. **OBS failure.** In streamer mode, stop the OBS replay buffer and press Clip now. Expect `failed … OutputNotRunning (after 3 attempts)` in the trigger log and a failed clip in the library; start the buffer again and the next clip succeeds.
+7. **Disk space.** Set `storage.min_free_gb` above the free space. Expect `disk space low: autonomous capture paused` and failed-clip records for autonomous moments; manual clips still work.
+8. **Restart recovery.** Quit PulseCut while a clip is rendering and restart: the job is re-queued and finishes.
+
 ## Not yet tested
 
 * Live OBS Studio (protocol mock only), real YouTube/Instagram/TikTok uploads, YouTube Live Chat with a real API key, Kick webhooks from Kick's servers.

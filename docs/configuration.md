@@ -66,7 +66,7 @@ Defaults below are the values in `crates/pulsecut-core/src/settings.rs`.
 | `segment_ring_secs` | `180` | Length of the rolling buffer. 30–3600. It is raised automatically to fit the replay window plus 20 s. |
 | `segment_copy_codec` | `true` | Copy the source codec when possible, so buffering does not re-encode. |
 | `extra_sources` | `[]` | Extra capture sources, each a table with `stream_id` and `input` (see the clipper workflow below). |
-| `max_parallel_buffers` | `2` | How many extra streams are recorded at the same time. The hottest streams win. 0–8. |
+| `max_parallel_buffers` | `2` | How many streams the selection scheduler may record at the same time (see `[watch]`). 0–8. |
 | `max_clip_secs` | `60.0` | Longest clip PulseCut produces. 5–180. |
 
 Example:
@@ -267,6 +267,27 @@ From a terminal, you can save a secret without typing it into the shell history:
 ```bash
 printf '%s' "$OBS_PASSWORD" | target/release/pulsecut-cli set-secret obs-websocket
 ```
+
+### `[watch]` — discovery and selection
+
+| Key | Default | Meaning |
+|---|---|---|
+| `monitoring_enabled` | `true` | Master switch for scheduler-managed buffers. |
+| `auto_select` | `true` | Pick streams automatically; when `false` only `manual_override` is monitored. |
+| `manual_override` | `""` | Login monitored first while it is live. |
+| `trending_enabled` | `false` | Fall back to top live streams (needs Twitch API credentials). |
+| `trending_language`, `trending_game_id` | `""` | Optional Helix filters. |
+| `trending_min_viewers` | `500` | Ignore smaller trending streams. |
+| `trending_candidates` | `20` | Trending streams fetched per poll (1-100). |
+| `min_watch_secs` | `300` | Keep a selected stream at least this long unless it goes offline. |
+| `switch_cooldown_secs` | `120` | Minimum time between voluntary switches. |
+| `hysteresis` | `1.25` | A challenger must score this many times higher (1.0-5.0). |
+| `favorites_preempt` | `true` | A live favorite replaces a non-favorite after `min_watch_secs`. |
+| `poll_secs` | `60` | Helix poll interval (15-900); errors back off up to 15 min. |
+| `twitch_client_id` | `""` | Client id of your Twitch application; the secret is the keychain entry `twitch-client-secret`. |
+| `[[watch.streamers]]` | none | `login`, `enabled`, `favorite`, `priority` (-100..100). |
+
+Entries in `chat.twitch_channels` are still watched (legacy list); editing one in the UI copies it into `watch.streamers`.
 
 ## Clipper workflow: Twitch and YouTube
 

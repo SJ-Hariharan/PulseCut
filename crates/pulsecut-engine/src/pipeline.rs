@@ -177,6 +177,8 @@ pub async fn render_clip(e: &Arc<Engine>, clip_id: Uuid, payload: &serde_json::V
         out: &out,
     };
     let rendered = render(&e.tools, &job).await?;
+    // Never report a clip as ready until the output file is verified.
+    verify_output(&e.tools, &out, rendered.duration_ms).await?;
 
     // Optional landscape export.
     let mut landscape = None;
@@ -311,6 +313,31 @@ pub async fn render_clip(e: &Arc<Engine>, clip_id: Uuid, payload: &serde_json::V
     Ok(())
 }
 
+/// Probe a rendered file: it must exist, contain video and be at least half the planned length.
+pub async fn verify_output(
+    tools: &pulsecut_core::process::Tools,
+    out: &std::path::Path,
+    planned_ms: i64,
+) -> Result<()> {
+    let size = std::fs::metadata(out).map(|m| m.len()).unwrap_or(0);
+    if size == 0 {
+        return Err(Error::other(format!(
+            "render produced no output file ({})",
+            out.display()
+        )));
+    }
+    let info = probe::probe(tools, out)
+        .await
+        .map_err(|x| Error::other(format!("rendered file is unreadable: {x}")))?;
+    if !info.has_video || info.duration_ms < planned_ms / 2 {
+        return Err(Error::other(format!(
+            "rendered file is incomplete ({} ms of {planned_ms} ms, video: {})",
+            info.duration_ms, info.has_video
+        )));
+    }
+    Ok(())
+}
+
 fn enabled_platforms(s: &pulsecut_core::Settings) -> Vec<&'static str> {
     let mut v = vec![];
     if s.publish.youtube_enabled {
@@ -440,5 +467,39 @@ mod tests {
         assert_eq!(json["duration_s"], 30.0);
         // Re-writing the same clip (e.g. after a re-render) must not fail.
         write_post_package(&video, &thumb, "twitch:somechannel", &meta, 30_000).unwrap();
+    }
+
+    #[tokio::test]
+    async fn output_is_verified_before_a_clip_is_ready() {
+        let t = pulsecut_core::process::Tools::discover(&Default::default(), &[]);
+        let Some(ffmpeg) = t.ffmpeg.clone() else { return };
+        if t.ffprobe.is_none() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let empty = dir.path().join("empty.mp4");
+        std::fs::write(&empty, b"").unwrap();
+        assert!(verify_output(&t, &empty, 2_000).await.is_err());
+        assert!(verify_output(&t, &dir.path().join("missing.mp4"), 2_000).await.is_err());
+        let ok = dir.path().join("ok.mp4");
+        let st = std::process::Command::new(ffmpeg)
+            .args([
+                "-v",
+                "error",
+                "-f",
+                "lavfi",
+                "-i",
+                "testsrc2=size=320x240:rate=30:duration=2",
+                "-pix_fmt",
+                "yuv420p",
+                "-y",
+            ])
+            .arg(&ok)
+            .status()
+            .unwrap();
+        assert!(st.success());
+        verify_output(&t, &ok, 2_000).await.unwrap();
+        let err = verify_output(&t, &ok, 10_000).await.unwrap_err().to_string();
+        assert!(err.contains("incomplete"), "{err}");
     }
 }

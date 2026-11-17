@@ -32,7 +32,7 @@ PulseCut waits until the post-roll has elapsed, saves the replay, moves it into 
 2. Settings → **Detection**: *Autonomous clipping* on; adjust *sensitivity*; set *chat reaction delay* to your stream latency + reaction time (low-latency Twitch ≈ 4–7 s).
 3. **Live Monitor** shows messages/s, unique chatters, the Hype Map (stacked signal contributions; white line = score, red = threshold) and each detection with its reasons.
 
-**Watching several streams:** list them all in Twitch channels; chat for each is analysed. To also *capture* them, add each as a stream source (Settings → Capture → Multi-stream: `twitch:name` → an HLS/RTMP URL you are allowed to record) and set *max simultaneous buffers*. PulseCut keeps rolling buffers for the hottest streams and switches focus with hysteresis. Only record streams you have rights to clip.
+**Watching several streams:** add streamers on the Live Monitor page (or Twitch channels in Settings). Chat for each is analysed; each one automatically gets a `twitch:<name>` video source, and the selection scheduler decides which ones are buffered (*max simultaneous buffers*): favorites and priority first, trending streams only as a fallback, with a minimum watch time, switch cooldown and hysteresis. See the README section *Using PulseCut as a Twitch clipper*. Only record streams you have rights to clip.
 
 YouTube Live chat: add the live video ID and save a YouTube Data API key (Settings → Platforms). Polling is quota-aware (≈ 5.5 h/day per key at the default 10 s interval).
 

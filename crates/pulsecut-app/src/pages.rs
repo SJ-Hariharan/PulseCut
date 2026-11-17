@@ -41,6 +41,26 @@ pub fn dashboard(app: &mut PulseCutApp, ui: &mut Ui) {
             ACCENT,
         );
         stat(ui, "Clips to review", review.to_string(), WARN);
+        stat(
+            ui,
+            "Rendering",
+            clips
+                .iter()
+                .filter(|c| c.status == ClipStatus::Rendering)
+                .count()
+                .to_string(),
+            INFO,
+        );
+        stat(
+            ui,
+            "Failed",
+            clips
+                .iter()
+                .filter(|c| c.status == ClipStatus::Failed)
+                .count()
+                .to_string(),
+            BAD,
+        );
         stat(ui, "Clips total", clips.len().to_string(), TEXT);
     });
     ui.add_space(GAP);
@@ -134,6 +154,8 @@ pub fn dashboard(app: &mut PulseCutApp, ui: &mut Ui) {
             )).color(MUTED).size(12.5));
         });
         let ui = &mut cols[1];
+        monitoring_card(app, ui);
+        ui.add_space(GAP);
         card().show(ui, |ui| {
             ui.set_min_width(ui.available_width());
             section(ui, "System");
@@ -170,6 +192,105 @@ pub fn dashboard(app: &mut PulseCutApp, ui: &mut Ui) {
                 ui.label(RichText::new(format!("{}  {m}", &pulsecut_core::time::fmt_local(*t)[11..])).size(12.0).color(MUTED));
             }
         });
+        ui.add_space(GAP);
+        card().show(ui, |ui| {
+            ui.set_min_width(ui.available_width());
+            section(ui, "Why moments were or were not clipped");
+            let notes = e.trigger_log();
+            if notes.is_empty() {
+                ui.label(RichText::new("No trigger decisions yet.").color(MUTED));
+            }
+            for n in notes.iter().rev().take(10) {
+                ui.horizontal_wrapped(|ui| {
+                    let c = match n.outcome {
+                        "queued" | "saved" => OK,
+                        "failed" => BAD,
+                        "suppressed" | "skipped" => WARN,
+                        "near_miss" => INFO,
+                        _ => MUTED,
+                    };
+                    badge(ui, n.outcome, c);
+                    ui.label(RichText::new(&pulsecut_core::time::fmt_local(n.ts)[11..]).color(MUTED).size(12.0));
+                    ui.label(RichText::new(short_id(&n.stream_id)).strong().size(12.5));
+                });
+                ui.label(RichText::new(&n.detail).size(12.0).color(MUTED));
+            }
+        });
+    });
+}
+
+fn short_id(id: &str) -> &str {
+    id.strip_prefix("twitch:").unwrap_or(id)
+}
+
+/// Apply a settings change from a dashboard control (kept in sync with the Settings draft).
+fn change_settings(app: &mut PulseCutApp, f: impl FnOnce(&mut pulsecut_core::Settings)) {
+    let mut n = app.engine.settings();
+    f(&mut n);
+    app.settings_draft.watch = n.watch.clone();
+    app.settings_draft.chat.twitch_channels = n.chat.twitch_channels.clone();
+    app.settings_draft.detection.autonomous_enabled = n.detection.autonomous_enabled;
+    if let Err(err) = app.engine.apply_settings(n) {
+        app.toast(err.to_string(), false);
+    }
+}
+
+fn monitoring_card(app: &mut PulseCutApp, ui: &mut Ui) {
+    let e = Arc::clone(&app.engine);
+    let s = e.settings();
+    let m = e.monitor_state();
+    card().show(ui, |ui| {
+        ui.set_min_width(ui.available_width());
+        section(ui, "Stream monitoring");
+        ui.horizontal_wrapped(|ui| {
+            let mut mon = s.watch.monitoring_enabled;
+            if ui.checkbox(&mut mon, "Monitoring").changed() {
+                change_settings(app, |n| n.watch.monitoring_enabled = mon);
+            }
+            let mut auto = s.watch.auto_select;
+            if ui.checkbox(&mut auto, "Automatic selection").changed() {
+                change_settings(app, |n| n.watch.auto_select = auto);
+            }
+            let mut clip = s.detection.autonomous_enabled;
+            if ui.checkbox(&mut clip, "Automatic clipping").changed() {
+                change_settings(app, |n| n.detection.autonomous_enabled = clip);
+            }
+        });
+        let buffers = e.monitored_streams();
+        if buffers.is_empty() {
+            status_line(ui, Some(false), "Monitoring", "no stream selected");
+        }
+        for (id, since) in &buffers {
+            let mins = (pulsecut_core::now_ms() - since) / 60_000;
+            let viewers = id
+                .strip_prefix("twitch:")
+                .and_then(|l| m.live.get(l).or_else(|| m.trending.iter().find(|t| t.login == l)))
+                .map(|x| format!(" · {} viewers · {}", x.viewers, x.game))
+                .unwrap_or_default();
+            status_line(
+                ui,
+                Some(true),
+                short_id(id),
+                &format!("buffering for {mins} min{viewers}"),
+            );
+        }
+        if !s.watch.manual_override.is_empty() {
+            ui.horizontal(|ui| {
+                ui.label(RichText::new(format!("Manual override: {}", s.watch.manual_override)).color(WARN));
+                if ui.small_button("clear").clicked() {
+                    change_settings(app, |n| n.watch.manual_override.clear());
+                }
+            });
+        }
+        status_line(ui, Some(m.api_ok), "Twitch discovery", &m.api_note);
+        for r in m.decision.reasons.iter().take(4) {
+            ui.label(RichText::new(r).size(12.0).color(MUTED));
+        }
+        ui.label(
+            RichText::new("Manage streamers on the Live Monitor page; rules in Settings > Platforms.")
+                .size(12.0)
+                .color(MUTED),
+        );
     });
 }
 
@@ -291,25 +412,190 @@ pub fn live(app: &mut PulseCutApp, ui: &mut Ui) {
             }
         });
     });
-    if streams.len() > 1 {
-        ui.add_space(GAP);
-        card().show(ui, |ui| {
-            section(ui, "Multi-stream leaderboard (hottest streams get capture buffers)");
-            egui::Grid::new("leader").striped(true).num_columns(5).show(ui, |ui| {
-                for h in ["Stream", "Hype index", "Msgs/s", "Score", "Capturing"] {
+    ui.add_space(GAP);
+    streamers_card(app, ui, &streams);
+}
+
+/// A deferred settings edit from a table row (applied after the grid is drawn).
+type SettingsEdit = Box<dyn FnOnce(&mut pulsecut_core::Settings)>;
+
+/// Watchlist management + live status, scores and selection reasons (one table).
+fn streamers_card(app: &mut PulseCutApp, ui: &mut Ui, streams: &[pulsecut_engine::StreamView]) {
+    let e = Arc::clone(&app.engine);
+    let s = e.settings();
+    let m = e.monitor_state();
+    let buffers = e.monitored_streams();
+    card().show(ui, |ui| {
+        ui.set_min_width(ui.available_width());
+        section(ui, "Streamers (watchlist, live status and selection)");
+        ui.horizontal(|ui| {
+            ui.add(
+                egui::TextEdit::singleline(&mut app.new_streamer)
+                    .hint_text("twitch login or URL")
+                    .desired_width(220.0),
+            );
+            if ui.button("+ Add streamer").clicked() {
+                let login = pulsecut_core::settings::normalize_login(&app.new_streamer);
+                if !login.is_empty() {
+                    change_settings(app, |n| {
+                        if !n.watch.streamers.iter().any(|x| x.login == login) {
+                            n.watch.streamers.push(pulsecut_core::settings::WatchStreamer {
+                                login: login.clone(),
+                                ..Default::default()
+                            });
+                        }
+                    });
+                    app.new_streamer.clear();
+                }
+            }
+        });
+        let list = pulsecut_engine::discovery::watchlist(&s);
+        let mut action: Option<SettingsEdit> = None;
+        egui::Grid::new("watchlist")
+            .striped(true)
+            .num_columns(9)
+            .show(ui, |ui| {
+                for h in [
+                    "On", "Fav", "Streamer", "Priority", "Live", "Viewers", "Score", "Status", "",
+                ] {
                     ui.label(RichText::new(h).color(MUTED));
                 }
                 ui.end_row();
-                for v in &streams {
-                    ui.label(&v.stream_id);
-                    ui.label(format!("{:.2}", v.hype_index));
-                    ui.label(format!("{:.1}", v.stats.msgs_per_sec));
-                    ui.label(format!("{:.2}", v.stats.last_score));
-                    ui.label(if v.capturing { "yes" } else { "—" });
+                for w in &list {
+                    let id = format!("twitch:{}", w.login);
+                    let sc = m.decision.candidates.iter().find(|c| c.login == id);
+                    let mut en = w.enabled;
+                    if ui.checkbox(&mut en, "").changed() {
+                        let w2 = w.clone();
+                        action = Some(Box::new(move |n| upsert(n, &w2, |x| x.enabled = en)));
+                    }
+                    let mut fav = w.favorite;
+                    if ui.checkbox(&mut fav, "").changed() {
+                        let w2 = w.clone();
+                        action = Some(Box::new(move |n| upsert(n, &w2, |x| x.favorite = fav)));
+                    }
+                    ui.label(RichText::new(&w.login).strong());
+                    let mut prio = w.priority;
+                    if ui.add(egui::DragValue::new(&mut prio).range(-10..=10)).changed() {
+                        let w2 = w.clone();
+                        action = Some(Box::new(move |n| upsert(n, &w2, |x| x.priority = prio)));
+                    }
+                    live_cells(ui, m.api_ok, m.live.get(&w.login).map(|x| x.viewers));
+                    ui.label(sc.map(|c| format!("{:.1}", c.score)).unwrap_or_default());
+                    let monitored = buffers.iter().any(|(b, _)| *b == id);
+                    ui.label(if monitored {
+                        RichText::new("monitoring").color(OK)
+                    } else {
+                        RichText::new(sc.map(|c| c.note.as_str()).unwrap_or("")).color(MUTED)
+                    });
+                    ui.horizontal(|ui| {
+                        if ui
+                            .small_button("monitor now")
+                            .on_hover_text("Manual override: monitor this streamer first")
+                            .clicked()
+                        {
+                            let l = w.login.clone();
+                            action = Some(Box::new(move |n| n.watch.manual_override = l));
+                        }
+                        if ui.small_button("remove").clicked() {
+                            let l = w.login.clone();
+                            action = Some(Box::new(move |n| {
+                                n.watch.streamers.retain(|x| x.login != l);
+                                n.chat
+                                    .twitch_channels
+                                    .retain(|c| pulsecut_core::settings::normalize_login(c) != l);
+                            }));
+                        }
+                    });
+                    ui.end_row();
+                }
+                for t in &m.trending {
+                    let id = format!("twitch:{}", t.login);
+                    let sc = m.decision.candidates.iter().find(|c| c.login == id);
+                    ui.label("");
+                    ui.label("");
+                    ui.label(RichText::new(format!("{} (trending)", t.login)).color(ACCENT_2));
+                    ui.label("");
+                    live_cells(ui, true, Some(t.viewers));
+                    ui.label(sc.map(|c| format!("{:.1}", c.score)).unwrap_or_default());
+                    let monitored = buffers.iter().any(|(b, _)| *b == id);
+                    ui.label(if monitored {
+                        RichText::new("monitoring").color(OK)
+                    } else {
+                        RichText::new(sc.map(|c| c.note.as_str()).unwrap_or("")).color(MUTED)
+                    });
+                    if ui.small_button("add").on_hover_text("Add to the watchlist").clicked() {
+                        let l = t.login.clone();
+                        action = Some(Box::new(move |n| {
+                            n.watch.streamers.push(pulsecut_core::settings::WatchStreamer {
+                                login: l,
+                                ..Default::default()
+                            })
+                        }));
+                    }
                     ui.end_row();
                 }
             });
-        });
+        if list.is_empty() && m.trending.is_empty() {
+            ui.label(
+                RichText::new(
+                    "No streamers yet. Add Twitch logins above, or enable trending discovery in Settings > Platforms.",
+                )
+                .color(MUTED),
+            );
+        }
+        if let Some(f) = action {
+            change_settings(app, f);
+        }
+        // Chat activity for every analysed stream (including ones without a buffer).
+        if !streams.is_empty() {
+            ui.add_space(6.0);
+            ui.label(RichText::new("Chat activity").color(MUTED));
+            egui::Grid::new("leader").striped(true).num_columns(4).show(ui, |ui| {
+                for h in ["Stream", "Hype index", "Msgs/s", "Score"] {
+                    ui.label(RichText::new(h).color(MUTED));
+                }
+                ui.end_row();
+                for v in streams {
+                    ui.label(short_id(&v.stream_id));
+                    ui.label(format!("{:.2}", v.hype_index));
+                    ui.label(format!("{:.1}", v.stats.msgs_per_sec));
+                    ui.label(format!("{:.2}", v.stats.last_score));
+                    ui.end_row();
+                }
+            });
+        }
+    });
+}
+
+fn live_cells(ui: &mut Ui, api: bool, viewers: Option<u32>) {
+    match (api, viewers) {
+        (false, _) => {
+            ui.label(RichText::new("unknown").color(MUTED));
+            ui.label("");
+        }
+        (true, Some(v)) => {
+            ui.label(RichText::new("live").color(OK));
+            ui.label(v.to_string());
+        }
+        (true, None) => {
+            ui.label(RichText::new("offline").color(MUTED));
+            ui.label("");
+        }
+    }
+}
+
+/// Edit a watchlist entry, materialising legacy `chat.twitch_channels` entries on first edit.
+fn upsert(
+    n: &mut pulsecut_core::Settings,
+    w: &pulsecut_core::settings::WatchStreamer,
+    f: impl FnOnce(&mut pulsecut_core::settings::WatchStreamer),
+) {
+    if !n.watch.streamers.iter().any(|x| x.login == w.login) {
+        n.watch.streamers.push(w.clone());
+    }
+    if let Some(x) = n.watch.streamers.iter_mut().find(|x| x.login == w.login) {
+        f(x);
     }
 }
 

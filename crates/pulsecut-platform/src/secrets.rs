@@ -14,6 +14,7 @@ pub mod keys {
     pub const INSTAGRAM_TOKEN: &str = "instagram-token";
     pub const TIKTOK_OAUTH: &str = "tiktok-oauth";
     pub const TIKTOK_CLIENT_SECRET: &str = "tiktok-client-secret";
+    pub const TWITCH_CLIENT_SECRET: &str = "twitch-client-secret";
 }
 
 pub trait SecretStore: Send + Sync {

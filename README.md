@@ -167,7 +167,7 @@ Partial files are allowed. Missing keys use defaults, and out-of-range values ar
 backend = "obs_replay_buffer"   # or "segment_buffer"
 pre_roll_secs = 20.0
 post_roll_secs = 10.0
-max_parallel_buffers = 2        # hottest extra streams to buffer, 0 to disable
+max_parallel_buffers = 2        # streams the selection scheduler may buffer, 0 to disable
 
 [detection]
 autonomous_enabled = true
@@ -215,19 +215,18 @@ Library location and retention are set in Settings > Storage, or with `[storage]
 
 ## Using PulseCut as a Twitch clipper
 
-1. In **Settings > Platforms > Twitch channels**, add the channels to watch. No Twitch login is needed. Chat is read anonymously over IRC.
-2. Each channel also becomes a source with the id `twitch:<channel>`. PulseCut resolves it to an HLS URL with yt-dlp, at the best quality up to 1080p. The URL is resolved again on every restart of the buffer. While a channel is offline, the lookup is retried every 30 seconds. The first channel is the home channel: if OBS is enabled (or a rolling-buffer `segment_source` is set) it keeps that capture instead. For a pure clipper setup, turn OBS off in Settings so every listed channel is recorded from Twitch.
-3. The capture buffer is limited by `max_parallel_buffers` (default 2, range 0 to 8). PulseCut ranks the watched channels by hype index, buffers the hottest ones, and switches focus only after a dwell period, so buffers do not flap between channels.
-4. An explicit `[[capture.extra_sources]]` entry with the same `stream_id` replaces the automatic source for that channel.
-5. When a clip is rendered, its `ready-to-post/<clip>/` folder contains:
-   - `video.mp4`: the vertical clip (hard-linked from the library when possible)
-   - `thumbnail.jpg`: the vertical cover
-   - `post.txt`: title, caption, hashtags, description, credit line and file list
-   - `post.json`: the same fields as structured data, plus `source`, `stream_id` and `duration_s`
+1. **Add streamers** on the **Live Monitor** page (or in Settings > Platforms > Twitch channels). Mark favorites, set priorities, disable entries without removing them, or press **monitor now** to pin one streamer. Chat is read anonymously; no Twitch login is needed.
+2. **Optional: live status and trending.** Create a free application at dev.twitch.tv, enter its client id in Settings > Platforms and save the client secret to the keychain. PulseCut then polls the official Helix API for live status and viewer counts, and can fall back to trending live streams (optional language, game and minimum-viewer filters) when none of your streamers is live. Without credentials every enabled streamer is treated as possibly live and the video buffer retries while a channel is offline.
+3. **Selection.** One scheduler picks the streams that get a video buffer (`max_parallel_buffers`, default 2). Watchlisted streamers always outrank trending ones; within a tier, favorites, priority, chat hype and (slightly) viewers decide. A stream is kept for at least `min_watch_secs` (300) unless it goes offline; voluntary switches need `switch_cooldown_secs` (120) and a challenger scoring `hysteresis` (1.25x) higher. A live favorite replaces a non-favorite after the minimum watch time. Reasons are shown on the dashboard and in `GET /api/monitor`.
+4. **Capture.** Each selected stream gets a `twitch:<channel>` source resolved with yt-dlp (best quality up to 1080p, re-resolved on every restart). When a stream loses its slot, clips that were already triggered are finished before its buffer stops. The first channel in the legacy `chat.twitch_channels` list is the home channel: if OBS is enabled (or a `segment_source` is set) it keeps that capture. For a pure clipper setup, turn OBS off.
+5. **Triggers.** Chat and stream audio are scored against each stream's own baseline; a moment fires only when the fused score crosses the sensitivity threshold. After a clip is saved, moments inside the cooldown or mostly overlapping it are suppressed. The dashboard log shows every queued, saved, suppressed, skipped, failed and near-miss moment with its reason.
+6. **Output.** When a clip is rendered and verified, its `ready-to-post/<clip>/` folder contains `video.mp4` (vertical clip), `thumbnail.jpg`, `post.txt` (title, caption, hashtags, description, credit) and `post.json`.
 
-The credit line names the channel and links to its Twitch page. Only clip and repost streams you have the rights to use, or the streamer's permission.
+The credit line names the channel and links to its Twitch page. Only clip and repost streams you have the rights to use, or the streamer's permission. PulseCut only reads public streams through supported tools and does not bypass DRM or access controls.
 
 ## Local API
+
+Endpoints: `GET /api/status`, `GET /api/monitor` (discovery, selection with per-candidate scores and reasons, buffers, clip-job counts, trigger log), `POST /api/clip`, `POST /webhooks/kick`.
 
 When `resources.local_api_port` is not 0, the engine listens on `127.0.0.1:<port>` (default `47120`). It is not reachable from other machines. The API does not require authentication, so any local process can call it.
 

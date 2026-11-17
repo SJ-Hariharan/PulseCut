@@ -24,6 +24,98 @@ pub struct Settings {
     pub privacy: PrivacySettings,
     pub resources: ResourceSettings,
     pub startup: StartupSettings,
+    /// Twitch watchlist, trending discovery and stream-selection rules.
+    pub watch: WatchSettings,
+}
+
+/// One streamer on the watchlist.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct WatchStreamer {
+    /// Twitch login (lowercase channel name).
+    pub login: String,
+    pub enabled: bool,
+    pub favorite: bool,
+    /// Higher = preferred. Typical range -10..10.
+    pub priority: i32,
+}
+
+impl Default for WatchStreamer {
+    fn default() -> Self {
+        WatchStreamer {
+            login: String::new(),
+            enabled: true,
+            favorite: false,
+            priority: 0,
+        }
+    }
+}
+
+/// Unified stream discovery and selection ("Hot Watch"). Watchlisted streamers come first;
+/// trending live streams are used as a fallback when no watchlisted stream is live.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct WatchSettings {
+    /// Master switch for autonomous stream monitoring (buffers + selection).
+    pub monitoring_enabled: bool,
+    /// Pick streams automatically. When false, only `manual_override` is monitored.
+    pub auto_select: bool,
+    /// Login to force-monitor (empty = none). Takes the first slot while it is live.
+    pub manual_override: String,
+    /// Fall back to trending live streams when no watchlisted stream is live.
+    pub trending_enabled: bool,
+    /// Optional filters for trending discovery (Twitch Helix `language`, `game_id`).
+    pub trending_language: String,
+    pub trending_game_id: String,
+    pub trending_min_viewers: u32,
+    /// How many trending candidates to consider per poll.
+    pub trending_candidates: u32,
+    /// A newly selected stream is kept at least this long (unless it goes offline).
+    pub min_watch_secs: u32,
+    /// Minimum time between voluntary switches.
+    pub switch_cooldown_secs: u32,
+    /// A challenger must score this many times higher than an incumbent to replace it.
+    pub hysteresis: f32,
+    /// A live favorite replaces a non-favorite once `min_watch_secs` has passed,
+    /// regardless of `hysteresis`.
+    pub favorites_preempt: bool,
+    /// Base poll interval for live status (seconds). Backs off on errors.
+    pub poll_secs: u32,
+    /// Twitch application client id (dev.twitch.tv). The client secret is stored in the
+    /// keychain entry `twitch-client-secret`. Without both, live status and trending are unknown
+    /// and every enabled watchlist stream is treated as possibly live.
+    pub twitch_client_id: String,
+    /// Watchlist. Entries in `chat.twitch_channels` are also watched (legacy list).
+    pub streamers: Vec<WatchStreamer>,
+}
+
+impl Default for WatchSettings {
+    fn default() -> Self {
+        WatchSettings {
+            monitoring_enabled: true,
+            auto_select: true,
+            manual_override: String::new(),
+            trending_enabled: false,
+            trending_language: String::new(),
+            trending_game_id: String::new(),
+            trending_min_viewers: 500,
+            trending_candidates: 20,
+            min_watch_secs: 300,
+            switch_cooldown_secs: 120,
+            hysteresis: 1.25,
+            favorites_preempt: true,
+            poll_secs: 60,
+            twitch_client_id: String::new(),
+            streamers: vec![],
+        }
+    }
+}
+
+/// Normalise a Twitch login: trim, drop a leading `#`, URL prefix, lowercase.
+pub fn normalize_login(s: &str) -> String {
+    let s = s.trim();
+    let s = s.rsplit("twitch.tv/").next().unwrap_or(s);
+    s.trim_start_matches('#').trim_matches('/').to_ascii_lowercase()
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -478,6 +570,23 @@ impl Settings {
 
     /// Clamp values to sane ranges (user-edited files can contain anything).
     pub fn sanitize(&mut self) {
+        let w = &mut self.watch;
+        w.hysteresis = if w.hysteresis.is_finite() {
+            w.hysteresis.clamp(1.0, 5.0)
+        } else {
+            1.25
+        };
+        w.poll_secs = w.poll_secs.clamp(15, 900);
+        w.trending_candidates = w.trending_candidates.clamp(1, 100);
+        w.min_watch_secs = w.min_watch_secs.min(7200);
+        w.switch_cooldown_secs = w.switch_cooldown_secs.min(7200);
+        w.manual_override = normalize_login(&w.manual_override);
+        let mut seen = std::collections::HashSet::new();
+        w.streamers.retain_mut(|x| {
+            x.login = normalize_login(&x.login);
+            x.priority = x.priority.clamp(-100, 100);
+            !x.login.is_empty() && seen.insert(x.login.clone())
+        });
         let c = &mut self.capture;
         c.pre_roll_secs = c.pre_roll_secs.clamp(0.0, 600.0);
         c.post_roll_secs = c.post_roll_secs.clamp(0.0, 600.0);

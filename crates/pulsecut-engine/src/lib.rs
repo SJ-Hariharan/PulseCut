@@ -17,8 +17,10 @@
 
 pub mod api;
 pub mod demo;
+pub mod discovery;
 pub mod multistream;
 pub mod pipeline;
+pub mod selection;
 pub mod voice;
 
 use pulsecut_capture::coordinator::{self, Backend, CaptureHandle, CaptureResult, CoordinatorConfig};
@@ -82,6 +84,52 @@ struct ChatHandles {
     youtube: Vec<pulsecut_chat::youtube::YouTubeChat>,
 }
 
+/// A stream buffer started by the selection scheduler.
+pub(crate) struct ActiveBuffer {
+    pub rec: Arc<SegmentRecorder>,
+    pub since: TsMs,
+    /// Coordinator task; finishes after every pending clip of this stream is saved.
+    pub done: Option<tokio::task::JoinHandle<()>>,
+}
+
+/// One entry of the trigger/monitoring debug log ("why was / wasn't this clipped").
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct TriggerNote {
+    pub ts: TsMs,
+    pub stream_id: String,
+    /// `queued`, `saved`, `suppressed`, `skipped`, `failed`, `near_miss`, `selection`.
+    pub outcome: &'static str,
+    pub detail: String,
+    pub confidence: Option<f32>,
+}
+
+/// Live state of discovery + selection, shown on the dashboard and via `/api/monitor`.
+#[derive(Debug, Clone, Default, serde::Serialize)]
+pub struct MonitorState {
+    /// Twitch API configured and the last poll succeeded.
+    pub api_ok: bool,
+    pub api_note: String,
+    pub last_poll: Option<TsMs>,
+    /// Live watchlist streams by login (from the last successful poll).
+    pub live: BTreeMap<String, pulsecut_chat::helix::LiveStream>,
+    pub trending: Vec<pulsecut_chat::helix::LiveStream>,
+    pub decision: selection::Decision,
+    pub decided_at: Option<TsMs>,
+    pub last_switch: Option<TsMs>,
+}
+
+/// Outcome of handing an event to a capture coordinator.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Queue {
+    Queued,
+    /// Autonomous capture paused (low disk space).
+    Paused,
+    /// No buffer for this stream (not selected for monitoring).
+    NoBuffer,
+    /// The coordinator's bounded queue is full.
+    Full,
+}
+
 pub struct Engine {
     pub paths: AppPaths,
     settings: RwLock<Settings>,
@@ -98,7 +146,13 @@ pub struct Engine {
     home_stream: RwLock<String>,
     obs: Mutex<Option<Arc<ObsController>>>,
     home_segments: Mutex<Option<Arc<SegmentRecorder>>>,
-    pub(crate) extra_recorders: Mutex<HashMap<String, (Arc<SegmentRecorder>, TsMs)>>,
+    pub(crate) extra_recorders: Mutex<HashMap<String, ActiveBuffer>>,
+    pub(crate) monitor: Mutex<MonitorState>,
+    pub(crate) monitor_wake: tokio::sync::Notify,
+    pub(crate) discovery_wake: tokio::sync::Notify,
+    trigger_log: Mutex<VecDeque<TriggerNote>>,
+    pub(crate) watch_chat: Mutex<Option<(Vec<String>, pulsecut_chat::twitch::TwitchChat)>>,
+    near_miss_at: Mutex<HashMap<String, TsMs>>,
     chat_tx: mpsc::Sender<StreamChat>,
     pub(crate) audio_tx: mpsc::Sender<(String, AudioSecond)>,
     chat: Mutex<ChatHandles>,
@@ -203,6 +257,12 @@ impl Engine {
             obs: Mutex::new(None),
             home_segments: Mutex::new(None),
             extra_recorders: Mutex::new(HashMap::new()),
+            monitor: Mutex::new(MonitorState::default()),
+            monitor_wake: tokio::sync::Notify::new(),
+            discovery_wake: tokio::sync::Notify::new(),
+            trigger_log: Mutex::new(VecDeque::new()),
+            watch_chat: Mutex::new(None),
+            near_miss_at: Mutex::new(HashMap::new()),
             chat_tx,
             audio_tx,
             chat: Mutex::new(ChatHandles {
@@ -260,6 +320,7 @@ impl Engine {
             w.spawn();
         }
         engine.spawn_maintenance();
+        discovery::spawn(Arc::clone(&engine));
         multistream::spawn(Arc::clone(&engine));
         if opts.start_api && settings.resources.local_api_port != 0 {
             api::spawn(Arc::clone(&engine), settings.resources.local_api_port);
@@ -406,7 +467,18 @@ impl Engine {
     /// Manual clip (hotkey, voice, UI button, local API). Returns the event id.
     pub fn clip_now(self: &Arc<Self>, trigger: TriggerSource) -> Uuid {
         let s = self.settings();
-        let stream = self.home_stream();
+        // Home stream when it has its own capture (OBS / rolling buffer); otherwise the stream
+        // the scheduler is monitoring right now (clipper mode).
+        let stream = {
+            let home = self.home_stream();
+            let caps = self.captures.lock().unwrap();
+            if caps.contains_key(&home) || caps.contains_key("home") {
+                home
+            } else {
+                let sel = self.monitor.lock().unwrap().decision.selected.first().cloned();
+                sel.filter(|x| caps.contains_key(x)).unwrap_or(home)
+            }
+        };
         let ev = HighlightEvent::manual(stream.clone(), trigger, now_ms());
         let id = ev.id;
         let req = CaptureRequest::around(ev.clone(), s.capture.pre_roll_ms(), s.capture.post_roll_ms());
@@ -415,12 +487,19 @@ impl Engine {
         tokio::spawn(async move {
             let _ = st.log_event(&ev).await;
         });
-        if !self.request_capture(&stream, req) {
-            self.log(
-                "manual clip requested but no capture source is running (connect OBS or set a stream source)".into(),
-            );
-        } else {
-            self.log(format!("{} clip requested", trigger.label()));
+        match self.request_capture(&stream, req) {
+            Queue::Queued => {
+                self.log(format!("{} clip requested on {stream}", trigger.label()));
+                self.note(&stream, "queued", format!("{} clip", trigger.label()), None);
+            }
+            q => {
+                let why = match q {
+                    Queue::Full => "capture queue full",
+                    _ => "no capture source is running (connect OBS, set a stream source or start monitoring)",
+                };
+                self.log(format!("manual clip requested but {why}"));
+                self.note(&stream, "failed", format!("{} clip: {why}", trigger.label()), None);
+            }
         }
         id
     }
@@ -442,17 +521,85 @@ impl Engine {
         self.store.recent_events(n).await.unwrap_or_default()
     }
 
-    fn request_capture(&self, stream_id: &str, req: CaptureRequest) -> bool {
+    fn request_capture(&self, stream_id: &str, req: CaptureRequest) -> Queue {
         if self.capture_paused() && !req.event.trigger.is_manual() {
             self.log("capture paused: low disk space".into());
-            return false;
+            return Queue::Paused;
         }
         let caps = self.captures.lock().unwrap();
         let home = self.home_stream();
         let h = caps
             .get(stream_id)
             .or_else(|| (stream_id == home).then(|| caps.get("home")).flatten());
-        h.map(|h| h.request(req)).unwrap_or(false)
+        match h {
+            None => Queue::NoBuffer,
+            Some(h) if h.request(req) => Queue::Queued,
+            Some(_) => Queue::Full,
+        }
+    }
+
+    /// Append to the bounded trigger/monitoring debug log.
+    pub fn note(&self, stream_id: &str, outcome: &'static str, detail: String, confidence: Option<f32>) {
+        tracing::debug!(stream = stream_id, outcome, "{detail}");
+        let mut l = self.trigger_log.lock().unwrap();
+        l.push_back(TriggerNote {
+            ts: now_ms(),
+            stream_id: stream_id.into(),
+            outcome,
+            detail,
+            confidence,
+        });
+        while l.len() > 300 {
+            l.pop_front();
+        }
+    }
+
+    /// Most recent trigger notes, newest last.
+    pub fn trigger_log(&self) -> Vec<TriggerNote> {
+        self.trigger_log.lock().unwrap().iter().cloned().collect()
+    }
+
+    pub fn monitor_state(&self) -> MonitorState {
+        self.monitor.lock().unwrap().clone()
+    }
+
+    /// Re-run discovery/selection now (e.g. after editing the watchlist).
+    pub fn wake_monitor(&self) {
+        self.discovery_wake.notify_one();
+        self.monitor_wake.notify_one();
+    }
+
+    /// Streams that currently have a scheduler-managed buffer, with their start time.
+    pub fn monitored_streams(&self) -> Vec<(String, TsMs)> {
+        let mut v: Vec<(String, TsMs)> = self
+            .extra_recorders
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(k, b)| (k.clone(), b.since))
+            .collect();
+        v.sort();
+        v
+    }
+
+    /// Stop accepting captures for a buffer, let its coordinator finish every pending clip,
+    /// then stop the recorder. Never discards an already-triggered clip.
+    pub(crate) fn release_buffer(self: &Arc<Self>, id: &str, b: ActiveBuffer) {
+        self.unregister_capture(id);
+        let e = Arc::clone(self);
+        let id = id.to_string();
+        let limit = Duration::from_secs((self.settings().capture.max_clip_secs as u64).max(30) + 90);
+        self.rt.spawn(async move {
+            if let Some(done) = b.done
+                && tokio::time::timeout(limit, done).await.is_err()
+            {
+                e.log(format!(
+                    "{id}: pending clips did not finish within {}s; stopping buffer",
+                    limit.as_secs()
+                ));
+            }
+            b.rec.stop();
+        });
     }
 
     /// Feed a chat message (used by tests, the demo and webhook receivers).
@@ -639,10 +786,22 @@ impl Engine {
         if let Some(r) = self.home_segments.lock().unwrap().take() {
             r.stop();
         }
-        for (_, (r, _)) in self.extra_recorders.lock().unwrap().drain() {
-            r.stop();
-        }
+        // Scheduler buffers: drop their capture handles but let pending clips finish.
+        let bufs: Vec<(String, ActiveBuffer)> = self.extra_recorders.lock().unwrap().drain().collect();
         self.captures.lock().unwrap().clear();
+        for (id, b) in bufs {
+            let limit = Duration::from_secs(150);
+            self.rt.spawn(async move {
+                if let Some(done) = b.done {
+                    let _ = tokio::time::timeout(limit, done).await;
+                }
+                b.rec.stop();
+                tracing::debug!("buffer {id} stopped");
+            });
+        }
+        if let Some((_, c)) = self.watch_chat.lock().unwrap().take() {
+            c.stop();
+        }
         self.chat_states.lock().unwrap().clear();
     }
 
@@ -665,6 +824,9 @@ impl Engine {
             self.start_capture_backend(None);
             self.start_chat_sources();
             self.log("sources restarted with new settings".into());
+        }
+        if old.watch != new.watch || sources_changed {
+            self.wake_monitor();
         }
         let mic_changed = old.audio != new.audio || old.voice != new.voice;
         if mic_changed {
@@ -731,23 +893,94 @@ impl Engine {
                     let _ = e.store.log_event(&ev).await;
                     let _ = e.events.send(EngineEvent::Highlight(ev.clone()));
                     let s = e.settings();
+                    let summary = format!(
+                        "{} moment (confidence {:.0}%): {}",
+                        ev.kind.label(),
+                        ev.confidence * 100.0,
+                        ev.reason_summary()
+                    );
                     if !s.detection.autonomous_enabled {
+                        e.note(
+                            &ev.stream_id,
+                            "skipped",
+                            format!("{summary} — automatic clipping is off"),
+                            Some(ev.confidence),
+                        );
                         continue;
                     }
                     let req = CaptureRequest::around(ev.clone(), s.capture.pre_roll_ms(), s.capture.post_roll_ms());
-                    let queued = e.request_capture(&ev.stream_id, req);
+                    let (start, end) = (req.clip_start, req.clip_end);
+                    let q = e.request_capture(&ev.stream_id, req);
                     e.log(format!(
                         "{} moment on {} (confidence {:.0}%): {}{}",
                         ev.kind.label(),
                         ev.stream_id,
                         ev.confidence * 100.0,
                         ev.reason_summary(),
-                        if queued {
-                            ""
-                        } else {
-                            " — not captured (no buffer for this stream)"
+                        match q {
+                            Queue::Queued => "",
+                            Queue::Paused => " — not captured (disk space low)",
+                            Queue::NoBuffer => " — not captured (stream not selected for buffering)",
+                            Queue::Full => " — not captured (capture queue full)",
                         }
                     ));
+                    match q {
+                        Queue::Queued => e.note(&ev.stream_id, "queued", summary, Some(ev.confidence)),
+                        Queue::NoBuffer => e.note(
+                            &ev.stream_id,
+                            "skipped",
+                            format!("{summary} — no video buffer (stream not selected)"),
+                            Some(ev.confidence),
+                        ),
+                        Queue::Paused | Queue::Full => {
+                            // A triggered moment on a monitored stream could not be captured:
+                            // record it as a failed clip so it is visible, never silently lost.
+                            let why = if q == Queue::Paused {
+                                "disk space low: autonomous capture paused"
+                            } else {
+                                "capture queue full"
+                            };
+                            let mut clip = ClipRecord::new(ev.clone(), start, end);
+                            clip.status = ClipStatus::Failed;
+                            clip.error = Some(why.into());
+                            let _ = e.store.upsert_clip(&clip).await;
+                            e.note(
+                                &ev.stream_id,
+                                "failed",
+                                format!("{summary} — {why}"),
+                                Some(ev.confidence),
+                            );
+                            let _ = e.events.send(EngineEvent::ClipChanged(clip.id));
+                        }
+                    }
+                }
+                // Near misses: explain moments that came close but did not trigger.
+                let near: Vec<(String, f32, f32)> = {
+                    let d = e.detectors.lock().unwrap();
+                    d.iter()
+                        .map(|(id, det)| {
+                            let st = det.stats();
+                            (id.clone(), st.last_score, st.threshold)
+                        })
+                        .filter(|(_, sc, thr)| *thr > 0.0 && *sc >= 0.75 * thr && sc < thr)
+                        .collect()
+                };
+                for (id, sc, thr) in near {
+                    let mut last = e.near_miss_at.lock().unwrap();
+                    if last.get(&id).is_some_and(|t| now - t < 30_000) {
+                        continue;
+                    }
+                    last.insert(id.clone(), now);
+                    drop(last);
+                    e.note(
+                        &id,
+                        "near_miss",
+                        format!(
+                            "score {sc:.2} reached {:.0}% of the threshold {thr:.2}; not clipped",
+                            sc / thr * 100.0
+                        ),
+                        None,
+                    );
                 }
             }
         });
@@ -757,6 +990,15 @@ impl Engine {
         let e = Arc::clone(self);
         tokio::spawn(async move {
             while let Some(r) = rx.recv().await {
+                if let Some(why) = &r.suppressed {
+                    e.note(
+                        &r.primary.stream_id,
+                        "suppressed",
+                        why.clone(),
+                        Some(r.primary.confidence),
+                    );
+                    continue;
+                }
                 let mut clip = ClipRecord::new(r.primary.clone(), r.clip_start, r.clip_end);
                 if let Some(f) = &r.file {
                     clip.raw_path = Some(f.path.display().to_string());
@@ -765,6 +1007,12 @@ impl Engine {
                 match (&r.file, &r.error) {
                     (Some(f), None) => {
                         clip.status = ClipStatus::Rendering;
+                        e.note(
+                            &r.primary.stream_id,
+                            "saved",
+                            format!("footage saved ({:.1}s); rendering", f.duration_ms as f64 / 1000.0),
+                            Some(r.primary.confidence),
+                        );
                         if e.store.upsert_clip(&clip).await.is_ok() {
                             let payload = serde_json::json!({"file": f, "events": r.events});
                             let _ = e.store.enqueue_job("render", Some(clip.id), &payload).await;
@@ -775,6 +1023,7 @@ impl Engine {
                         clip.error = Some(err.clone());
                         let _ = e.store.upsert_clip(&clip).await;
                         e.log(format!("capture failed for {}: {err}", r.primary.stream_id));
+                        e.note(&r.primary.stream_id, "failed", err.clone(), Some(r.primary.confidence));
                         let _ = e.events.send(EngineEvent::CaptureFailed {
                             stream_id: r.primary.stream_id.clone(),
                             error: err.clone(),

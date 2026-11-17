@@ -214,6 +214,52 @@ fn capture_tab(app: &mut PulseCutApp, ui: &mut Ui) {
 
 fn platforms_tab(app: &mut PulseCutApp, ui: &mut Ui) {
     let s = &mut app.settings_draft;
+    section(ui, "Stream discovery and selection (Twitch)");
+    ui.label(
+        RichText::new(
+            "Watchlisted streamers (Live Monitor page) come first; trending live streams are only a fallback. \
+             Live status, viewer counts and trending need a free Twitch application (dev.twitch.tv): \
+             without one, watchlisted streams are treated as possibly live.",
+        )
+        .color(MUTED)
+        .size(12.0),
+    );
+    ui.horizontal(|ui| {
+        ui.label("Twitch client id");
+        ui.text_edit_singleline(&mut s.watch.twitch_client_id);
+    });
+    secret_row(app, ui, "Twitch client secret", keys::TWITCH_CLIENT_SECRET);
+    let s = &mut app.settings_draft;
+    ui.checkbox(
+        &mut s.watch.trending_enabled,
+        "Fall back to trending live streams when no watchlisted stream is live",
+    );
+    ui.horizontal(|ui| {
+        ui.label("Trending language");
+        ui.add(
+            egui::TextEdit::singleline(&mut s.watch.trending_language)
+                .hint_text("en")
+                .desired_width(50.0),
+        );
+        ui.label("game id");
+        ui.add(
+            egui::TextEdit::singleline(&mut s.watch.trending_game_id)
+                .hint_text("any")
+                .desired_width(90.0),
+        );
+        ui.label("min viewers");
+        ui.add(egui::DragValue::new(&mut s.watch.trending_min_viewers).range(0..=1_000_000));
+    });
+    ui.add(egui::Slider::new(&mut s.watch.min_watch_secs, 0..=3600).text("minimum watch time per stream (s)"));
+    ui.add(egui::Slider::new(&mut s.watch.switch_cooldown_secs, 0..=3600).text("cooldown between switches (s)"));
+    ui.add(
+        egui::Slider::new(&mut s.watch.hysteresis, 1.0..=3.0).text("a challenger must score this many times higher"),
+    );
+    ui.checkbox(
+        &mut s.watch.favorites_preempt,
+        "A live favorite replaces a non-favorite after the minimum watch time",
+    );
+    ui.add(egui::Slider::new(&mut s.watch.poll_secs, 15..=900).text("live-status poll interval (s)"));
     section(ui, "Chat sources");
     list_edit(
         ui,

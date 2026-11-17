@@ -27,6 +27,7 @@ pub fn router(engine: Arc<Engine>) -> Router {
     Router::new()
         .route("/api/clip", post(clip))
         .route("/api/status", get(status))
+        .route("/api/monitor", get(monitor))
         .route("/webhooks/kick", post(kick))
         .with_state(st)
 }
@@ -61,6 +62,33 @@ async fn status(State(s): State<Arc<ApiState>>) -> Json<serde_json::Value> {
         "streams": streams,
         "clips": e.clips().len(),
         "capture_paused": e.capture_paused(),
+        "monitoring": {
+            "enabled": e.settings().watch.monitoring_enabled,
+            "selected": e.monitor_state().decision.selected,
+            "buffers": e.monitored_streams().into_iter().map(|(id, since)| serde_json::json!({"stream": id, "since": since})).collect::<Vec<_>>(),
+        },
+    }))
+}
+
+/// Discovery, selection (with per-candidate scores and reasons), clip-job counts and the
+/// trigger log explaining why moments were or were not clipped.
+async fn monitor(State(s): State<Arc<ApiState>>) -> Json<serde_json::Value> {
+    let e = &s.engine;
+    let m = e.monitor_state();
+    let clips = e.clips();
+    let count = |st: pulsecut_core::ClipStatus| clips.iter().filter(|c| c.status == st).count();
+    Json(serde_json::json!({
+        "monitoring_enabled": e.settings().watch.monitoring_enabled,
+        "auto_clip_enabled": e.settings().detection.autonomous_enabled,
+        "discovery": {"api_ok": m.api_ok, "note": m.api_note, "last_poll": m.last_poll, "live": m.live, "trending": m.trending},
+        "selection": {"decided_at": m.decided_at, "last_switch": m.last_switch, "decision": m.decision},
+        "buffers": e.monitored_streams().into_iter().map(|(id, since)| serde_json::json!({"stream": id, "since": since})).collect::<Vec<_>>(),
+        "clip_jobs": {
+            "rendering": count(pulsecut_core::ClipStatus::Rendering),
+            "failed": count(pulsecut_core::ClipStatus::Failed),
+            "review": count(pulsecut_core::ClipStatus::Review),
+        },
+        "trigger_log": e.trigger_log().into_iter().rev().take(100).collect::<Vec<_>>(),
     }))
 }
 

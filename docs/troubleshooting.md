@@ -92,6 +92,23 @@ brew upgrade yt-dlp        # if outdated
 
 PulseCut looks in `/opt/homebrew/bin` and `/usr/local/bin` first, then `PATH`, each time it resolves a source.
 
+### A moment was detected but no clip was made
+
+Open the dashboard card **Why moments were or were not clipped** (or `GET /api/monitor`, field `trigger_log`):
+
+- `skipped … stream not selected`: chat for that channel is analysed but it has no video buffer. Raise `max_parallel_buffers`, give it a higher priority or favorite, or press **monitor now**.
+- `suppressed … cooldown` / `duplicate`: a clip was saved moments earlier. Lower **min seconds between separate clips** in Settings > Detection if you want more clips.
+- `near_miss`: the score reached 75-99% of the threshold. Raise **Sensitivity** to clip more.
+- `failed`: the reason is shown (OBS save error after 3 attempts, disk space low, buffer not ready…).
+
+### Monitoring keeps the same stream although another one is live
+
+That is intentional damping: a stream is kept for the minimum watch time, voluntary switches respect the switch cooldown, and a challenger must score `hysteresis` times higher. The dashboard shows the reason (for example `keep tenz: min watch time (300s) not reached`). A live favorite preempts a non-favorite after the minimum watch time.
+
+### "Twitch credentials rejected" / live status "unknown"
+
+Live status and trending need a Twitch application client id (Settings > Platforms) and its client secret in the keychain. Rejected credentials pause polling for 10 minutes; network errors back off up to 15 minutes. While status is unknown, watchlisted streams stay eligible.
+
 ## Build and binaries
 
 ### `PulseCut` and `pulsecut` binaries overwrite each other

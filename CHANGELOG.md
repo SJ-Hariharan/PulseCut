@@ -4,6 +4,25 @@ All notable changes to this project are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- Unified stream discovery and selection ("Hot Watch"). One scheduler decides which Twitch streams get a video buffer: watchlisted streamers first (favorites, then priority), trending live streams only as a fallback when no watchlisted stream is live. Switching is damped by a minimum watch time, a switch cooldown and a hysteresis ratio; a live favorite can preempt a non-favorite after the minimum watch time; a manual override pins one streamer. Every decision is explained.
+- Live status, viewer counts and trending discovery through the official Twitch Helix API (free app access token, client-credentials flow), with token caching, refresh on 401, rate-limit and exponential backoff. Without credentials, watchlisted streams are treated as possibly live.
+- Watchlist management on the Live Monitor page (add, remove, enable, favorite, priority, "monitor now"), a "Stream monitoring" card and a "Why moments were or were not clipped" log on the dashboard, rendering/failed job counters, and `GET /api/monitor`.
+- Trigger log: every detected moment is recorded as queued, saved, suppressed (cooldown/duplicate), skipped (not selected / clipping off), failed (with reason) or near miss (score reached 75-99% of the threshold).
+- Settings section `[watch]` (backwards compatible; existing `chat.twitch_channels` entries are still watched).
+
+### Fixed
+
+- Pending clips were discarded when a stream lost its buffer: the capture coordinator now finishes every pending clip (waiting for its post-roll) before the buffer stops.
+- Overlapping duplicate clips: after a clip is saved, autonomous moments inside the cooldown, or with at least 60% of their window already saved, are suppressed and logged. Manual clips are never suppressed.
+- Transient capture failures (OBS save errors) are retried up to 3 times with backoff before the clip is marked failed.
+- A clip is only marked ready after the rendered file is probed (exists, has video, at least half the planned length).
+- A detected moment that cannot be queued (disk space low, queue full) is recorded as a failed clip instead of only a log line.
+- The manual "clip now" trigger targets the monitored stream when the home stream has no capture of its own.
+
 ## [0.1.0] - 2026-11-17
 
 First release. Verified on macOS (Apple Silicon) only.

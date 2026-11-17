@@ -61,6 +61,8 @@ pub struct PulseCutApp {
     pub search: String,
     pub status_filter: Option<pulsecut_core::ClipStatus>,
     pub live_stream: Option<String>,
+    /// Text field for adding a streamer to the watchlist.
+    pub new_streamer: String,
     pub editor_plan: Option<(Uuid, EditPlan)>,
     pub edit_meta: Option<(Uuid, pulsecut_core::ClipMetadata, String)>,
     pub settings_draft: pulsecut_core::Settings,
@@ -113,6 +115,7 @@ impl PulseCutApp {
             search: String::new(),
             status_filter: None,
             live_stream: None,
+            new_streamer: String::new(),
             editor_plan: None,
             edit_meta: None,
             settings_dirty: false,

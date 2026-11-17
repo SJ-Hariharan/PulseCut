@@ -2,10 +2,12 @@
 //!
 //! * `twitch`  – anonymous read-only IRC over WebSocket (no account or token needed)
 //! * `youtube` – Data API v3 `liveChatMessages.list` polling with an API key (quota-aware)
+//! * `helix`   – official Twitch Helix client (app token) for live status and trending discovery
 //! * `kick`    – official webhook payload parsing + RSA-SHA256 signature verification
 //!
 //! Each source is independent so one platform failing never stops the others.
 
+pub mod helix;
 pub mod kick;
 pub mod twitch;
 pub mod youtube;
