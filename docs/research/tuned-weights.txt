@@ -1,0 +1,1 @@
+{'w': [0.0, 0.5, 2.5, 2.5, 1.0, 1.0, 1.0, 1.0, 1.0], 'agreement_bonus': 0.15, 'base_threshold': 0.45, 'ratio_full': 6.0, 'z_full': 5.0, 'lead_secs': 1.0}

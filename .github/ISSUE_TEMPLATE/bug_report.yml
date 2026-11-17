@@ -1,0 +1,84 @@
+name: Bug report
+description: Report a reproducible problem with PulseCut
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a bug. Please do not report security vulnerabilities here. See the
+        [security policy](https://github.com/SJ-Hariharan/PulseCut/security/policy) instead.
+  - type: input
+    id: pulsecut-version
+    attributes:
+      label: PulseCut version
+      description: Shown in the app's About section, or the version/commit you built from.
+      placeholder: "0.1.0"
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: Operating system and version
+      placeholder: "macOS 15.4 (Apple Silicon) / Windows 11 23H2"
+    validations:
+      required: true
+  - type: dropdown
+    id: capture-backend
+    attributes:
+      label: Capture backend
+      description: Which capture mode you were using when the problem happened.
+      options:
+        - OBS replay buffer
+        - Segment buffer (FFmpeg rolling buffer)
+        - Not sure
+    validations:
+      required: true
+  - type: input
+    id: obs-version
+    attributes:
+      label: OBS Studio version
+      description: Only if the problem involves OBS. Leave blank otherwise.
+      placeholder: "31.0.0"
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Numbered steps that reliably trigger the problem.
+      placeholder: |
+        1. Open PulseCut and go to ...
+        2. Click ...
+        3. ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behaviour
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behaviour
+      description: What happened instead. Include error messages and screenshots if helpful.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: |
+        Paste relevant log output, or attach a log file. Before posting, remove:
+        - tokens, API keys, OAuth codes, OBS passwords and any channel credentials
+        - file paths that reveal your username or private folders
+      render: text
+    validations:
+      required: false
+  - type: checkboxes
+    id: redaction
+    attributes:
+      label: Redaction check
+      options:
+        - label: I have removed tokens, channel credentials, passwords and personal file paths from this report.
+          required: true

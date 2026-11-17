@@ -1,0 +1,86 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  macos:
+    name: macOS (fmt, clippy, test, package)
+    runs-on: macos-14
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - name: Install FFmpeg
+        run: brew install ffmpeg
+      - name: Format
+        run: cargo fmt --all -- --check
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Test
+        run: cargo test --workspace --release
+      - name: Package app bundle
+        run: scripts/package-macos.sh release
+      - name: Check bundle contains the GUI and CLI binaries
+        run: |
+          test -x target/dist/PulseCut.app/Contents/MacOS/PulseCut
+          test -x target/dist/PulseCut.app/Contents/MacOS/pulsecut-cli
+          target/dist/PulseCut.app/Contents/MacOS/pulsecut-cli --version
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PulseCut-macos
+          path: target/dist/*.dmg
+          if-no-files-found: warn
+
+  windows:
+    name: Windows (experimental)
+    runs-on: windows-latest
+    timeout-minutes: 60
+    # Windows support is untested in 0.1.0; failures here do not block the build.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Install FFmpeg
+        run: choco install ffmpeg -y --no-progress
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Test
+        run: cargo test --workspace --release
+      - name: Package
+        run: pwsh scripts/package-windows.ps1
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PulseCut-windows
+          path: target/dist/*.zip
+          if-no-files-found: warn
+
+  dependencies:
+    name: Dependency audit (advisories, licenses, sources)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check advisories licenses bans sources
