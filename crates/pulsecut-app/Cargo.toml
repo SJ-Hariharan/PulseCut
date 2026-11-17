@@ -1,0 +1,29 @@
+[package]
+name = "pulsecut-app"
+description = "PulseCut native desktop application (egui/eframe)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "PulseCut"
+path = "src/main.rs"
+
+[dependencies]
+pulsecut-core.workspace = true
+pulsecut-detect.workspace = true
+pulsecut-media.workspace = true
+pulsecut-store.workspace = true
+pulsecut-capture.workspace = true
+pulsecut-chat.workspace = true
+pulsecut-platform.workspace = true
+pulsecut-engine.workspace = true
+eframe.workspace = true
+egui.workspace = true
+egui_extras = { workspace = true, features = ["image"] }
+image.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+uuid.workspace = true
+chrono.workspace = true

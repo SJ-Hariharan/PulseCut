@@ -1,0 +1,29 @@
+[package]
+name = "pulsecut-engine"
+description = "PulseCut orchestrator: chat → detection → capture → edit/render → library → publishing"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+pulsecut-core.workspace = true
+pulsecut-detect.workspace = true
+pulsecut-media.workspace = true
+pulsecut-edit.workspace = true
+pulsecut-meta.workspace = true
+pulsecut-store.workspace = true
+pulsecut-capture.workspace = true
+pulsecut-chat.workspace = true
+pulsecut-platform.workspace = true
+pulsecut-publish.workspace = true
+tokio.workspace = true
+axum.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+uuid.workspace = true
+chrono.workspace = true
+hound.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

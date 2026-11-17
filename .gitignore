@@ -1,0 +1,41 @@
+# Build output
+/target
+/dist
+
+# Local toolchain cache used by env.sh
+/.cargo-home
+
+# Generated demo output and downloaded models
+/demo-output
+/models/*.bin
+/models/*.gguf
+
+# Local configuration, databases and secrets (never commit)
+.env
+.env.*
+!.env.example
+*.sqlite
+*.sqlite-*
+*.db
+settings.toml
+*.pem
+*.key
+*.p12
+client_secret*.json
+credentials*.json
+token*.json
+
+# Logs and media produced while testing
+*.log
+/logs
+*.mp4
+*.mov
+*.ts
+!crates/**/*.ts
+
+# Editor / OS / tool state
+.DS_Store
+.idea/
+.vscode/
+*.swp
+/.claude

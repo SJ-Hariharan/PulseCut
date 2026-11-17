@@ -1,0 +1,24 @@
+[package]
+name = "pulsecut-capture"
+description = "Capture backends: OBS replay buffer (deferred save) and FFmpeg rolling segment buffer, with timestamp sync and coverage checks"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+pulsecut-core.workspace = true
+pulsecut-media.workspace = true
+pulsecut-detect.workspace = true
+tokio.workspace = true
+obws = { workspace = true, features = ["events"] }
+futures-util.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+uuid.workspace = true
+tokio-tungstenite.workspace = true
+sha2.workspace = true
+base64.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

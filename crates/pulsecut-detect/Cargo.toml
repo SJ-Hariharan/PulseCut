@@ -1,0 +1,14 @@
+[package]
+name = "pulsecut-detect"
+description = "Streaming multi-signal highlight detection (chat + audio), synthetic datasets and evaluation"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+pulsecut-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+uuid.workspace = true
+rayon.workspace = true
+tracing.workspace = true

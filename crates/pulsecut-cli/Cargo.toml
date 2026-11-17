@@ -1,0 +1,29 @@
+[package]
+name = "pulsecut-cli"
+description = "PulseCut command line: headless daemon, acceptance demo, evaluation, rendering, OBS/chat diagnostics"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "pulsecut-cli"
+path = "src/main.rs"
+
+[dependencies]
+pulsecut-core.workspace = true
+pulsecut-detect.workspace = true
+pulsecut-media.workspace = true
+pulsecut-edit.workspace = true
+pulsecut-meta.workspace = true
+pulsecut-store.workspace = true
+pulsecut-capture.workspace = true
+pulsecut-chat.workspace = true
+pulsecut-platform.workspace = true
+pulsecut-engine.workspace = true
+tokio.workspace = true
+clap.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+serde_json.workspace = true
+uuid.workspace = true
+anyhow.workspace = true

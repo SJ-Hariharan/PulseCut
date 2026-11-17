@@ -1,0 +1,20 @@
+[package]
+name = "pulsecut-chat"
+description = "Live chat ingestion: Twitch IRC (anonymous, read-only), YouTube Live Chat polling, Kick webhooks"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+pulsecut-core.workspace = true
+pulsecut-detect.workspace = true
+tokio.workspace = true
+tokio-tungstenite.workspace = true
+futures-util.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+chrono.workspace = true
+tracing.workspace = true
+base64.workspace = true
+rsa = { version = "0.9", features = ["sha2"] }

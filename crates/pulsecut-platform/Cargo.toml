@@ -1,0 +1,20 @@
+[package]
+name = "pulsecut-platform"
+description = "OS abstractions: microphone, keychain secrets, global hotkeys, autostart, notifications, disk/system stats"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+pulsecut-core.workspace = true
+cpal.workspace = true
+keyring.workspace = true
+global-hotkey.workspace = true
+sysinfo.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+serde.workspace = true
+directories.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
